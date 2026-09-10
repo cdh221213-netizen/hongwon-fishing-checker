@@ -49,93 +49,43 @@ def home():
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
-        <title>홍원항 낚시 예약조회</title>
-
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                max-width: 600px;
-                margin: 60px auto;
-                padding: 20px;
-            }
-
-            h1 {
-                margin-bottom: 30px;
-            }
-
-            input, button {
-                font-size: 18px;
-                padding: 12px;
-                margin: 5px 0;
-            }
-
-            button {
-                cursor: pointer;
-            }
-
-            #result {
-                margin-top: 30px;
-                font-size: 20px;
-                line-height: 1.8;
-            }
-        </style>
+        <title>뉴대호 구조 확인</title>
     </head>
 
-    <body>
+    <body style="font-family:Arial; max-width:900px; margin:40px auto;">
 
-        <h1>🎣 홍원항 낚시 예약조회</h1>
+        <h1>뉴대호 HTML 구조 확인</h1>
 
-        <input type="date" id="date">
-        <button onclick="check()">조회하기</button>
+        <input type="date" id="date" value="2026-09-21">
+        <button onclick="check()">확인하기</button>
 
-        <div id="result"></div>
+        <pre id="result"
+             style="
+             white-space:pre-wrap;
+             word-break:break-all;
+             background:#f5f5f5;
+             padding:20px;
+             margin-top:20px;
+             "></pre>
 
         <script>
             async function check() {
-
                 const date =
                     document.getElementById("date").value;
 
-                if (!date) {
-                    alert("날짜를 선택해주세요.");
-                    return;
-                }
+                const result =
+                    document.getElementById("result");
 
-                document.getElementById("result").innerHTML =
-                    "조회 중...";
+                result.textContent = "조회 중...";
 
                 const response =
-                    await fetch(
-                        "/newdaeho-date/" + date
-                    );
+                    await fetch("/debug/" + date);
 
                 const data =
                     await response.json();
 
-                if (!data.found) {
-                    document.getElementById("result").innerHTML =
-                        "조회 결과를 확인하지 못했습니다.";
-                    return;
-                }
-
-                let statusText = data.status;
-
-                if (data.status === "예약완료") {
-                    statusText = "🔴 예약완료";
-                }
-
-                else if (data.status === "예약가능") {
-                    statusText = "🟢 예약가능";
-                }
-
-                else {
-                    statusText = "⚪ 확인필요";
-                }
-
-                document.getElementById("result").innerHTML =
-                    "<b>뉴대호</b><br>" +
-                    data.date + "<br>" +
-                    "<b>" + statusText + "</b>";
+                result.textContent =
+                    data.debug_html || JSON.stringify(data, null, 2);
             }
         </script>
 
@@ -144,93 +94,43 @@ def home():
     """
 
 
-@app.route("/newdaeho-date/<date_str>")
-def newdaeho_date(date_str):
+@app.route("/debug/<date_str>")
+def debug_page(date_str):
 
     try:
-
         selected_date = datetime.strptime(
             date_str,
             "%Y-%m-%d"
         )
 
-        year = selected_date.year
-        month = selected_date.month
-        day = selected_date.day
-
         response = get_newdaeho_page(
-            year,
-            month,
-            day
+            selected_date.year,
+            selected_date.month,
+            selected_date.day
         )
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
+        html = response.text
 
-        page_text = soup.get_text(
-            " ",
-            strip=True
-        )
+        position = html.find("뉴대호피싱")
 
-        ship_position = page_text.find(
-            "뉴대호피싱"
-        )
-
-        if ship_position == -1:
-
+        if position == -1:
             return jsonify({
-                "ship": "뉴대호",
-                "date": date_str,
                 "found": False,
-                "status": "확인불가"
+                "message": "뉴대호피싱 문자열을 HTML에서 찾지 못했습니다."
             })
 
-        ship_section = page_text[
-            ship_position:
-            ship_position + 2000
-        ]
+        start = max(0, position - 3000)
+        end = min(len(html), position + 5000)
 
-        status = "확인필요"
-
-        reserve_complete_position = (
-            ship_section.find("예약완료")
-        )
-
-        reserve_possible_position = (
-            ship_section.find("예약가능")
-        )
-
-        reserve_button_position = (
-            ship_section.find("예약하기")
-        )
-
-        if reserve_complete_position != -1:
-            status = "예약완료"
-
-        elif (
-            reserve_possible_position != -1
-            or reserve_button_position != -1
-        ):
-            status = "예약가능"
+        debug_html = html[start:end]
 
         return jsonify({
-            "ship": "뉴대호",
-            "date": date_str,
             "found": True,
-            "status": status
+            "date": date_str,
+            "debug_html": debug_html
         })
 
-    except ValueError:
-
-        return jsonify({
-            "found": False,
-            "message": "날짜 형식 오류"
-        }), 400
-
     except Exception as e:
-
         return jsonify({
             "found": False,
             "error": str(e)
