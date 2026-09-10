@@ -1,14 +1,13 @@
 from flask import Flask, jsonify
 import requests
-import re
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-NEWDAEHO_URL = "http://www.newdaeho.com/index.php?mid=bk"
+NEWDAEHO_BASE_URL = "http://www.newdaeho.com/index.php"
 
 
-def get_newdaeho_text():
+def get_newdaeho_page(year, month, day):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -18,13 +17,26 @@ def get_newdaeho_text():
         "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
     }
 
+    params = {
+        "mid": "bk",
+        "year": str(year),
+        "month": f"{month:02d}",
+        "day": f"{day:02d}",
+        "mode": "list",
+        "won": "1",
+        "PA_N_UID": "0",
+        "sel": "day#list"
+    }
+
     response = requests.get(
-        NEWDAEHO_URL,
+        NEWDAEHO_BASE_URL,
+        params=params,
         headers=headers,
         timeout=20,
         allow_redirects=True
     )
 
+    response.raise_for_status()
     response.encoding = response.apparent_encoding
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -42,81 +54,50 @@ def home():
     })
 
 
-@app.route("/newdaeho")
-def check_newdaeho():
-    try:
-        response, text = get_newdaeho_text()
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        title = soup.title.get_text(strip=True) if soup.title else None
-
-        return jsonify({
-            "ship": "뉴대호",
-            "url": NEWDAEHO_URL,
-            "status_code": response.status_code,
-            "final_url": response.url,
-            "page_title": title,
-            "content_length": len(response.text),
-            "success": response.ok
-        })
-
-    except Exception as e:
-        return jsonify({
-            "ship": "뉴대호",
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-@app.route("/newdaeho-text")
-def newdaeho_text():
-    try:
-        response, text = get_newdaeho_text()
-        return text
-
-    except Exception as e:
-        return str(e), 500
-
-
 @app.route("/newdaeho-date/<date_str>")
 def newdaeho_date(date_str):
     try:
-        year, month, day = map(int, date_str.split("-"))
+        parts = date_str.split("-")
 
-        response, text = get_newdaeho_text()
+        if len(parts) != 3:
+            raise ValueError
 
-        pattern = re.compile(
-            rf"{year}년\s*0?{month}월\s*0?{day}일"
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
+
+        response, text = get_newdaeho_page(
+            year,
+            month,
+            day
         )
 
-        match = pattern.search(text)
+        target1 = f"{year}년 {month:02d}월 {day:02d}일"
+        target2 = f"{year}년 {month}월 {day}일"
 
-        if not match:
+        if target1 not in text and target2 not in text:
             return jsonify({
                 "ship": "뉴대호",
                 "date": date_str,
                 "found": False,
-                "message": "해당 날짜를 찾지 못했습니다."
+                "message": "해당 날짜의 예약 페이지를 찾지 못했습니다.",
+                "source_url": response.url
             })
 
-        start = match.start()
-
-        next_date_pattern = re.compile(
-            r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일"
-        )
-
-        next_match = next_date_pattern.search(text, match.end())
-
-        if next_match:
-            section = text[start:next_match.start()]
+        if "예약완료" in text:
+            status = "예약완료"
+        elif "예약가능" in text:
+            status = "예약가능"
         else:
-            section = text[start:start + 3000]
+            status = "확인필요"
 
         return jsonify({
             "ship": "뉴대호",
             "date": date_str,
             "found": True,
-            "result": section
+            "status": status,
+            "source_url": response.url,
+            "result": text[:5000]
         })
 
     except ValueError:
