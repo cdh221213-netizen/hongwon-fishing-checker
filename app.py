@@ -50,6 +50,7 @@ def home():
     <head>
         <meta charset="UTF-8">
         <title>홍원항 낚시 예약조회</title>
+
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -57,17 +58,21 @@ def home():
                 margin: 60px auto;
                 padding: 20px;
             }
+
             h1 {
                 margin-bottom: 30px;
             }
+
             input, button {
                 font-size: 18px;
                 padding: 12px;
                 margin: 5px 0;
             }
+
             button {
                 cursor: pointer;
             }
+
             #result {
                 margin-top: 30px;
                 font-size: 20px;
@@ -87,7 +92,9 @@ def home():
 
         <script>
             async function check() {
-                const date = document.getElementById("date").value;
+
+                const date =
+                    document.getElementById("date").value;
 
                 if (!date) {
                     alert("날짜를 선택해주세요.");
@@ -98,9 +105,12 @@ def home():
                     "조회 중...";
 
                 const response =
-                    await fetch("/newdaeho-date/" + date);
+                    await fetch(
+                        "/newdaeho-date/" + date
+                    );
 
-                const data = await response.json();
+                const data =
+                    await response.json();
 
                 if (!data.found) {
                     document.getElementById("result").innerHTML =
@@ -112,8 +122,14 @@ def home():
 
                 if (data.status === "예약완료") {
                     statusText = "🔴 예약완료";
-                } else if (data.status === "예약가능") {
+                }
+
+                else if (data.status === "예약가능") {
                     statusText = "🟢 예약가능";
+                }
+
+                else {
+                    statusText = "⚪ 확인필요";
                 }
 
                 document.getElementById("result").innerHTML =
@@ -130,7 +146,9 @@ def home():
 
 @app.route("/newdaeho-date/<date_str>")
 def newdaeho_date(date_str):
+
     try:
+
         selected_date = datetime.strptime(
             date_str,
             "%Y-%m-%d"
@@ -156,11 +174,12 @@ def newdaeho_date(date_str):
             strip=True
         )
 
-        date_text = (
-            f"{year}년 {month:02d}월 {day:02d}일"
+        ship_position = page_text.find(
+            "뉴대호피싱"
         )
 
-        if date_text not in page_text:
+        if ship_position == -1:
+
             return jsonify({
                 "ship": "뉴대호",
                 "date": date_str,
@@ -168,26 +187,33 @@ def newdaeho_date(date_str):
                 "status": "확인불가"
             })
 
+        ship_section = page_text[
+            ship_position:
+            ship_position + 2000
+        ]
+
         status = "확인필요"
 
-        rows = soup.find_all("tr")
+        reserve_complete_position = (
+            ship_section.find("예약완료")
+        )
 
-        for row in rows:
-            row_text = row.get_text(
-                " ",
-                strip=True
-            )
+        reserve_possible_position = (
+            ship_section.find("예약가능")
+        )
 
-            if "뉴대호피싱" in row_text:
-                if "예약완료" in row_text:
-                    status = "예약완료"
-                elif (
-                    "예약가능" in row_text
-                    or "예약하기" in row_text
-                ):
-                    status = "예약가능"
+        reserve_button_position = (
+            ship_section.find("예약하기")
+        )
 
-                break
+        if reserve_complete_position != -1:
+            status = "예약완료"
+
+        elif (
+            reserve_possible_position != -1
+            or reserve_button_position != -1
+        ):
+            status = "예약가능"
 
         return jsonify({
             "ship": "뉴대호",
@@ -197,12 +223,14 @@ def newdaeho_date(date_str):
         })
 
     except ValueError:
+
         return jsonify({
             "found": False,
             "message": "날짜 형식 오류"
         }), 400
 
     except Exception as e:
+
         return jsonify({
             "found": False,
             "error": str(e)
