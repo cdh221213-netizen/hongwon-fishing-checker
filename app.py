@@ -58,6 +58,39 @@ def check_newdaeho():
             "error": str(e)
         }), 500
 
+   
 
+
+@app.route("/newdaeho-text")
+def newdaeho_text():
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/152.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    }
+
+    try:
+        response = requests.get(
+            NEWDAEHO_URL,
+            headers=headers,
+            timeout=20,
+            allow_redirects=True
+        )
+
+        response.encoding = response.apparent_encoding
+        soup = BeautifulSoup(response.text, "html.parser")
+        text = soup.get_text("\n", strip=True)
+
+        return text
+
+    except Exception as e:
+        return str(e), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
