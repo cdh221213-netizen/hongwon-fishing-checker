@@ -49,12 +49,12 @@ def home():
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
-        <title>뉴대호 구조 확인</title>
+        <title>뉴대호 구조 분석</title>
     </head>
 
     <body style="font-family:Arial; max-width:900px; margin:40px auto;">
 
-        <h1>뉴대호 HTML 구조 확인</h1>
+        <h1>뉴대호 예약 구조 분석</h1>
 
         <input type="date" id="date" value="2026-09-21">
         <button onclick="check()">확인하기</button>
@@ -79,13 +79,13 @@ def home():
                 result.textContent = "조회 중...";
 
                 const response =
-                    await fetch("/debug/" + date);
+                    await fetch("/inspect/" + date);
 
                 const data =
                     await response.json();
 
                 result.textContent =
-                    data.debug_html || JSON.stringify(data, null, 2);
+                    JSON.stringify(data, null, 2);
             }
         </script>
 
@@ -94,8 +94,8 @@ def home():
     """
 
 
-@app.route("/debug/<date_str>")
-def debug_page(date_str):
+@app.route("/inspect/<date_str>")
+def inspect(date_str):
 
     try:
         selected_date = datetime.strptime(
@@ -109,30 +109,62 @@ def debug_page(date_str):
             selected_date.day
         )
 
-        html = response.text
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
 
-        position = html.find("뉴대호피싱")
+        images = []
 
-        if position == -1:
-            return jsonify({
-                "found": False,
-                "message": "뉴대호피싱 문자열을 HTML에서 찾지 못했습니다."
+        for img in soup.find_all("img"):
+            images.append({
+                "src": img.get("src"),
+                "alt": img.get("alt"),
+                "title": img.get("title"),
+                "class": img.get("class")
             })
 
-        start = max(0, position - 3000)
-        end = min(len(html), position + 5000)
+        links = []
 
-        debug_html = html[start:end]
+        for a in soup.find_all("a"):
+            text = a.get_text(
+                " ",
+                strip=True
+            )
+
+            href = a.get("href")
+
+            if text or href:
+                links.append({
+                    "text": text,
+                    "href": href,
+                    "class": a.get("class"),
+                    "title": a.get("title")
+                })
+
+        buttons = []
+
+        for tag in soup.find_all(
+            ["button", "input"]
+        ):
+            buttons.append({
+                "tag": tag.name,
+                "type": tag.get("type"),
+                "value": tag.get("value"),
+                "name": tag.get("name"),
+                "class": tag.get("class")
+            })
 
         return jsonify({
-            "found": True,
             "date": date_str,
-            "debug_html": debug_html
+            "source_url": response.url,
+            "images": images,
+            "links": links,
+            "buttons": buttons
         })
 
     except Exception as e:
         return jsonify({
-            "found": False,
             "error": str(e)
         }), 500
 
