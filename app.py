@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 import requests
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -8,7 +9,7 @@ app = Flask(__name__)
 NEWDAEHO_BASE_URL = "http://www.newdaeho.com/index.php"
 
 
-def get_page(year, month, day):
+def get_newdaeho_page(year, month, day):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -42,100 +43,211 @@ def get_page(year, month, day):
     return response
 
 
-def check_reservation(date_str):
-    selected = datetime.strptime(date_str, "%Y-%m-%d")
+def extract_remaining_number(text):
+    patterns = [
+        r"남은자리\s*[:：]?\s*(\d+)",
+        r"잔여\s*[:：]?\s*(\d+)",
+        r"(\d+)\s*석",
+        r"(\d+)\s*자리",
+        r"(\d+)\s*명"
+    ]
 
-    response = get_page(
+    for pattern in patterns:
+        match = re.search(pattern, text)
+
+        if match:
+            return int(match.group(1))
+
+    # 남은자리 칸에 숫자 하나만 있는 경우
+    clean = text.strip()
+
+    if re.fullmatch(r"\d+", clean):
+        return int(clean)
+
+    return None
+
+
+def check_newdaeho(date_str):
+
+    selected = datetime.strptime(
+        date_str,
+        "%Y-%m-%d"
+    )
+
+    response = get_newdaeho_page(
         selected.year,
         selected.month,
         selected.day
     )
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
 
-    # 뉴대호피싱이 들어있는 행을 찾는다.
-    target_row = None
+    # 선박명 / 예약현황 / 남은자리 헤더가 있는 예약표 찾기
+    reservation_table = None
 
-    for tr in soup.find_all("tr"):
-        text = tr.get_text(" ", strip=True)
+    for table in soup.find_all("table"):
 
-        if "뉴대호피싱" in text:
-            target_row = tr
-            break
-
-    # 사이트 구조에 따라 td 내부에 있을 수도 있으므로 한 번 더 검색
-    if target_row is None:
-        target_text = soup.find(
-            string=lambda x: x and "뉴대호피싱" in x
+        table_text = table.get_text(
+            " ",
+            strip=True
         )
 
-        if target_text:
-            target_row = target_text.find_parent("tr")
+        if (
+            "선박명" in table_text
+            and "예약현황" in table_text
+            and "남은자리" in table_text
+        ):
+            reservation_table = table
+            break
 
-    if target_row is None:
+    if reservation_table is None:
         return {
             "status": "unknown",
-            "message": "뉴대호피싱 예약정보를 찾지 못했습니다."
+            "remaining": None,
+            "message": "예약표를 찾지 못했습니다."
         }
 
-    # 해당 행의 모든 이미지 alt 확인
-    image_alts = []
+    # 뉴대호피싱 행 찾기
+    ship_row = None
 
-    for img in target_row.find_all("img"):
-        alt = img.get("alt")
+    for tr in reservation_table.find_all("tr"):
 
-        if alt:
-            image_alts.append(alt.strip())
+        row_text = tr.get_text(
+            " ",
+            strip=True
+        )
 
-    # 예약완료 이미지 확인
-    if "예약완료" in image_alts:
+        if "뉴대호피싱" in row_text:
+            ship_row = tr
+            break
+
+    if ship_row is None:
         return {
-            "status": "full",
-            "message": "예약완료"
+            "status": "unknown",
+            "remaining": None,
+            "message": "뉴대호피싱 예약행을 찾지 못했습니다."
         }
 
-    # 행 전체 텍스트
-    row_text = target_row.get_text(
+    # 행 안의 칸(td) 확인
+    cells = ship_row.find_all(
+        "td",
+        recursive=False
+    )
+
+    # 중첩 테이블 때문에 직접 td가 안 잡히는 경우
+    if len(cells) < 2:
+        cells = ship_row.find_all("td")
+
+    if not cells:
+        return {
+            "status": "unknown",
+            "remaining": None,
+            "message": "남은자리 칸을 찾지 못했습니다."
+        }
+
+    # 화면상 오른쪽 마지막 칸이 '남은자리'
+    remaining_cell = cells[-1]
+
+    remaining_text = remaining_cell.get_text(
         " ",
         strip=True
     )
 
-    # 남은자리 숫자가 직접 텍스트로 표시되는 경우
-    import re
+    # 이미지 alt/title 등도 함께 검사
+    extra_text = []
 
-    patterns = [
-        r"남은자리\s*(\d+)",
-        r"남은자리\s*[:：]?\s*(\d+)",
-        r"잔여\s*(\d+)",
-        r"(\d+)\s*자리"
-    ]
+    for img in remaining_cell.find_all("img"):
 
-    for pattern in patterns:
-        match = re.search(pattern, row_text)
+        for attr in ["alt", "title", "src"]:
 
-        if match:
-            seats = int(match.group(1))
+            value = img.get(attr)
 
+            if value:
+                extra_text.append(str(value))
+
+    for tag in remaining_cell.find_all(
+        ["a", "button", "input"]
+    ):
+
+        for attr in [
+            "title",
+            "value",
+            "class",
+            "href"
+        ]:
+
+            value = tag.get(attr)
+
+            if value:
+
+                if isinstance(value, list):
+                    value = " ".join(value)
+
+                extra_text.append(str(value))
+
+        tag_text = tag.get_text(
+            " ",
+            strip=True
+        )
+
+        if tag_text:
+            extra_text.append(tag_text)
+
+    combined = (
+        remaining_text
+        + " "
+        + " ".join(extra_text)
+    )
+
+    # 1. 예약완료/마감
+    if (
+        "예약완료" in combined
+        or "예약마감" in combined
+        or "마감" in remaining_text
+    ):
+        return {
+            "status": "full",
+            "remaining": 0,
+            "message": "예약완료"
+        }
+
+    # 2. 실제 남은자리 숫자 확인
+    remaining = extract_remaining_number(
+        combined
+    )
+
+    if remaining is not None:
+
+        if remaining <= 0:
             return {
-                "status": "available",
-                "remaining": seats,
-                "message": f"예약가능 · 남은자리 {seats}석"
+                "status": "full",
+                "remaining": 0,
+                "message": "예약완료"
             }
 
-    # 예약완료 이미지가 없으면 일단 예약 가능 상태로 판정하되
-    # 좌석 숫자를 확인하지 못한 경우
+        return {
+            "status": "available",
+            "remaining": remaining,
+            "message": f"예약가능 · 남은자리 {remaining}석"
+        }
+
+    # 3. 숫자를 못 찾았으면 절대 예약가능으로 단정하지 않음
     return {
-        "status": "available",
+        "status": "unknown",
         "remaining": None,
-        "message": "예약가능"
+        "message": "남은자리 확인필요",
+        "debug_remaining_text": combined[:500]
     }
 
 
 @app.route("/")
 def home():
+
     return """
 <!DOCTYPE html>
-
 <html lang="ko">
 
 <head>
@@ -145,21 +257,21 @@ def home():
 <meta name="viewport"
 content="width=device-width, initial-scale=1.0">
 
-<title>홍원항 낚시 예약조회</title>
+<title>홍원항 낚시 빈자리 조회</title>
 
 <style>
 
 body {
     font-family: Arial, sans-serif;
-    background:#f5f7fa;
+    background:#f4f6f8;
     margin:0;
 }
 
 .container {
-    max-width:600px;
-    margin:70px auto;
-    background:white;
+    max-width:650px;
+    margin:60px auto;
     padding:35px;
+    background:white;
     border-radius:18px;
     box-shadow:0 5px 20px rgba(0,0,0,0.08);
 }
@@ -175,39 +287,45 @@ h1 {
 }
 
 input {
-    font-size:17px;
-    padding:12px;
     flex:1;
+    padding:14px;
+    font-size:18px;
 }
 
 button {
-    font-size:17px;
-    padding:12px 20px;
+    padding:14px 22px;
+    font-size:18px;
     cursor:pointer;
 }
 
-.result {
+.card {
+    display:none;
     margin-top:30px;
     padding:22px;
     background:#f7f7f7;
     border-radius:12px;
-    display:none;
 }
 
 .ship {
-    font-size:22px;
-    font-weight:bold;
-    margin-bottom:10px;
-}
-
-.status {
-    font-size:20px;
+    font-size:23px;
     font-weight:bold;
 }
 
 .date {
-    margin-bottom:15px;
-    color:#555;
+    margin-top:6px;
+    color:#666;
+}
+
+.status {
+    margin-top:15px;
+    font-size:21px;
+    font-weight:bold;
+}
+
+.note {
+    margin-top:25px;
+    color:#777;
+    font-size:14px;
 }
 
 </style>
@@ -218,16 +336,19 @@ button {
 
 <div class="container">
 
-<h1>🎣 홍원항 낚시 예약조회</h1>
+<h1>🎣 홍원항 낚시 빈자리 조회</h1>
 
-<p>날짜를 선택하면 뉴대호 예약현황을 확인합니다.</p>
+<p>
+날짜를 선택하면 선박별 예약현황과 남은자리를 확인합니다.
+</p>
 
 <div class="search">
 
 <input
-type="date"
-id="date"
-value="2026-09-21">
+    type="date"
+    id="date"
+    value="2026-09-21"
+>
 
 <button onclick="check()">
 조회하기
@@ -235,18 +356,27 @@ value="2026-09-21">
 
 </div>
 
-<div id="result" class="result">
+<div id="card" class="card">
 
 <div class="ship">
 뉴대호
 </div>
 
-<div id="resultDate" class="date"></div>
-
-<div id="status" class="status">
-조회 중...
+<div
+    id="resultDate"
+    class="date">
 </div>
 
+<div
+    id="status"
+    class="status">
+</div>
+
+</div>
+
+<div class="note">
+현재 뉴대호 예약정보 추출 규칙을 검증 중이며,
+이후 다른 홍원항 선박도 같은 화면에 추가할 예정입니다.
 </div>
 
 </div>
@@ -264,25 +394,27 @@ async function check() {
         return;
     }
 
-    const box =
-        document.getElementById("result");
+    const card =
+        document.getElementById("card");
 
     const status =
         document.getElementById("status");
 
-    const resultDate =
-        document.getElementById("resultDate");
+    document.getElementById(
+        "resultDate"
+    ).textContent = date;
 
-    box.style.display = "block";
+    card.style.display = "block";
 
-    resultDate.textContent = date;
-
-    status.textContent = "⏳ 조회 중...";
+    status.textContent =
+        "⏳ 조회 중...";
 
     try {
 
         const response =
-            await fetch("/api/check/" + date);
+            await fetch(
+                "/api/newdaeho/" + date
+            );
 
         const data =
             await response.json();
@@ -290,35 +422,25 @@ async function check() {
         if (data.status === "full") {
 
             status.textContent =
-                "🔴 예약완료";
+                "🔴 예약완료 · 남은자리 0석";
 
         }
 
-        else if (data.status === "available") {
+        else if (
+            data.status === "available"
+        ) {
 
-            if (data.remaining !== null &&
-                data.remaining !== undefined) {
-
-                status.textContent =
-                    "🟢 예약가능 · 남은자리 "
-                    + data.remaining
-                    + "석";
-
-            }
-
-            else {
-
-                status.textContent =
-                    "🟢 예약가능";
-
-            }
+            status.textContent =
+                "🟢 예약가능 · 남은자리 "
+                + data.remaining
+                + "석";
 
         }
 
         else {
 
             status.textContent =
-                "🟡 확인필요";
+                "🟡 남은자리 확인필요";
 
         }
 
@@ -336,34 +458,40 @@ async function check() {
 </script>
 
 </body>
-
 </html>
 """
 
 
-@app.route("/api/check/<date_str>")
-def api_check(date_str):
+@app.route("/api/newdaeho/<date_str>")
+def api_newdaeho(date_str):
 
     try:
 
-        result = check_reservation(date_str)
+        result =
+            check_newdaeho(date_str)
 
         result["ship"] = "뉴대호"
         result["date"] = date_str
 
         return jsonify(result)
 
+    except ValueError:
+
+        return jsonify({
+            "status": "error",
+            "message": "날짜 형식 오류"
+        }), 400
+
     except Exception as e:
 
         return jsonify({
-            "ship": "뉴대호",
-            "date": date_str,
             "status": "error",
             "message": str(e)
         }), 500
 
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=10000
